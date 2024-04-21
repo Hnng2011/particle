@@ -85,7 +85,7 @@ async function postNonce(msg: any, setSignedMessage: any) {
         throw new Error('Network response was not ok');
       }
       const data = await response.json();
-      window.location.href = `http://localhost:8080/login/matrixai.click?loginToken=${data.token}`;
+      window.location.href = `https://cinny-nine.vercel.app/login/matrixai.click?loginToken=${data.token}`;
     } catch (error) {
       console.log('error', error);
     } finally {
