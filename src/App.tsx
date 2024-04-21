@@ -1,120 +1,166 @@
-import React, { useState, useEffect } from 'react';
-import { ParticleNetwork } from '@particle-network/auth';
+import { useState, useEffect, useMemo, useCallback } from 'react';
+import { ParticleNetwork } from "@particle-network/auth";
 import { SmartAccount } from '@particle-network/aa';
-import { ParticleProvider } from '@particle-network/provider';
+import { EthereumSepolia } from "@particle-network/chains";
 import { ethers } from 'ethers';
-import { Presets, Client } from 'userop';
-import { notification } from 'antd';
 import './App.css';
+import { ParticleProvider } from '@particle-network/provider';
 
 const config = {
-  projectId: process.env.REACT_APP_PROJECT_ID,
-  clientKey: process.env.REACT_APP_CLIENT_KEY,
-  appId: process.env.REACT_APP_APP_ID,
+  projectId: "1315bb86-19f3-4f6e-9a12-31eab7b2ec3f",
+  clientKey: "cRQE7UFsZGSn1PsZyJJ9XdH0yBJMNbuSke9QBUNu",
+  appId: "42256ba6-4b68-4119-898b-8073aaf73d50",
 };
 
 const particle = new ParticleNetwork({
   ...config,
-  chainName: 'ethereum',
-  chainId: 5,
-  wallet: { displayWalletEntry: true },
+  chainName: EthereumSepolia.name, // Optional: resolves to 'ethereum' both in this case & by default
+  chainId: EthereumSepolia.id, // Optional: resolves to 1 both in this case & by default
+  wallet: {
+    preload: true,  // Optional: object controlling additional configurations
+    displayWalletEntry: true,  // Whether or not the wallet popup is shown on-screen after login // If the former is true, the position in which the popup appears
+    uiMode: "dark",  // Light or dark, if left blank, aligns with web auth default
+    supportChains: [{ id: EthereumSepolia.id, name: EthereumSepolia.name }], // Restricts the chains available within the web wallet interface
+    customStyle: { evmSupportWalletConnect: true, }, // If applicable, custom wallet style in JSON
+  },
 });
 
 const provider = new ethers.providers.Web3Provider(new ParticleProvider(particle.auth));
 
-const smartAccountBiconomy = new SmartAccount(new ParticleProvider(particle.auth), {
+const smartAccount = new SmartAccount(new ParticleProvider(particle.auth), {
   ...config,
   aaOptions: {
-    simple: [{ chainId: 5, version: '1.0.0' }],
+    accountContracts: {
+      SIMPLE: [
+        {
+          version: '1.0.0',
+          chainIds: [EthereumSepolia.id],
+        }
+      ],
+    },
   },
 });
 
-particle.setERC4337({
-  name: 'SIMPLE',
-  version: '1.0.0'
-})
+smartAccount.setSmartAccountContract({ name: 'SIMPLE', version: '1.0.0' });
 
-const initializePaymaster = () => {
-  const paymasterContext = { type: 'payg' };
-  return Presets.Middleware.verifyingPaymaster(
-    process.env.REACT_APP_STACKUP_PAYMASTER,
-    paymasterContext
-  );
-};
+async function getNonce(address: any, setSignedMessage: any) {
+  const add = address.toString().toLowerCase();
+  const fetchData = async () => {
+    try {
+      const response = await fetch(`https://auth.matrixai.click/api/v1/get-msg?address=${add}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
 
-const App = () => {
-  const [userInfo, setUserInfo] = useState(null);
-  const [ethBalance, setEthBalance] = useState(null);
-  const [isDeployed, setIsDeployed] = useState(null);
-
-  useEffect(() => {
-    if (userInfo) fetchAccountInfo();
-  }, [userInfo]);
-
-  const fetchAccountInfo = async () => {
-    const address = await smartAccountBiconomy.getAddress();
-    const balance = ethers.utils.formatEther(await provider.getBalance(address));
-    const isDeployed = await smartAccountBiconomy.isDeployed();
-
-    setEthBalance(balance);
-    setIsDeployed(isDeployed);
-  };
-
-  const deployAccount = async () => {
-    if (!isDeployed) {
-      await smartAccountBiconomy.deployWalletContract();
+      });
+      if (!response.ok) {
+        throw new Error('Network response was not ok');
+      }
+      const data = await response.json();
+      setSignedMessage(String(data.message));
+    } catch (error) {
+      console.log('error', error);
+    } finally {
+      console.log('Success');
     }
   };
 
-  const handleLogin = async (preferredAuthType) => {
-    const user = await particle.auth.login({ preferredAuthType });
-    setUserInfo(user);
+  fetchData();
+};
+
+async function postNonce(msg: any, setSignedMessage: any) {
+  const postData = async () => {
+    try {
+      const response = await fetch(`https://auth.matrixai.click/api/v1/get-jwt`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '1000',
+        },
+        body: JSON.stringify({ signature: setSignedMessage, msg: msg }),
+
+      });
+      if (!response.ok) {
+        throw new Error('Network response was not ok');
+      }
+      const data = await response.json();
+      window.location.href = `http://localhost:8080/login/matrixai.click?loginToken=${data.token}`;
+    } catch (error) {
+      console.log('error', error);
+    } finally {
+      console.log('Success');
+    }
   };
 
-  const executeUserOp = async () => {
-    const paymaster = initializePaymaster();
-    const signer = provider.getSigner();
-    const builder = await Presets.Builder.SimpleAccount.init(signer, process.env.REACT_APP_RPC_URL, { paymasterMiddleware: paymaster });
-    const client = await Client.init(process.env.REACT_APP_RPC_URL);
+  postData();
+};
 
-    const address = builder.getSender();
-    console.log(`Account address: ${address}`);
+const App = () => {
+  const [aaAccount, setAAAccount] = useState<any>(null);
+  const [msg, setMsg] = useState<any>('');
+  particle.setERC4337({ name: 'SIMPLE', version: '1.0.0' });
 
-    const res = await client.sendUserOperation(builder.execute("0x000000000000000000000000000000000000dEaD", ethers.utils.parseUnits('0.001', 'ether'), "0x"), {
-      onBuild: (op) => console.log("Signed UserOperation:", op),
-    });
-
-    notification.success({
-      message: "User operation successful",
-      description: `userOpHash: ${res.userOpHash}`
-    });
+  const handleLogin = async (preferredAuthType: any) => {
+    await particle.auth.login({ preferredAuthType });
+    const addressA = await smartAccount.getAddress();
+    setAAAccount(addressA)
   };
 
+  useEffect(() => {
+    async function LoadMessage() {
+      aaAccount && await getNonce(aaAccount, setMsg);
+    }
+
+    LoadMessage();
+  }, [aaAccount])
+
+  useEffect(() => { msg && signAddress() }, [msg]);
+
+
+  useEffect(() => {
+    return () => {
+      particle.auth.logout();
+      delete window.particle;
+    };
+  }, []);
+
+
+  const signAddress = useCallback(async () => {
+    const signature = await provider.getSigner().signMessage(msg);
+    await provider.getSigner().getAddress();
+    await postNonce(msg, signature);
+  }, [aaAccount, msg]);
 
   return (
-      <div className="App">
-        <div className="logo-section">
-          <img src="https://i.imgur.com/EerK7MS.png" alt="Logo 1" className="logo logo-big"/>
-          <img src="https://i.imgur.com/9gGvvtO.png" alt="Logo 2" className="logo"/>
+    <div className="App">
+      <div className="logo-section">
+        <img src="https://i.imgur.com/EerK7MS.png" alt="Logo 1" className="logo logo-big" />
+        <img src="https://i.imgur.com/9gGvvtO.png" alt="Logo 2" className="logo" />
+      </div>
+
+      {!aaAccount && (
+        <div className="login-section">
+          <button className="sign-button" onClick={() => handleLogin('google')}>Sign in with Google</button>
+          <button className="sign-button" onClick={() => handleLogin('twitter')}>Sign in with Twitter</button>
         </div>
-        {!userInfo ? (
-          <div className="login-section">
-            <button className="sign-button" onClick={() => handleLogin('google')}>Sign in with Google</button>
-            <button className="sign-button" onClick={() => handleLogin('twitter')}>Sign in with Twitter</button>
-          </div>
-        ) : (
-          <div className="profile-card">
-            <h2>{userInfo.name}</h2>
-            <div className="balance-section">
-              <small>{ethBalance} ETH</small>
-              {isDeployed ? (
-                <button className="sign-message-button" onClick={executeUserOp}>Execute User Operation</button>
-              ) : (
-                <button className="sign-message-button" onClick={deployAccount}>Deploy Account</button>
-              )}
-            </div>
-          </div>
-        )}
+      )
+        // : (
+        // <div className="profile-card">
+        //   <h2>{userInfo.name}</h2>
+        //   <div className="balance-section">
+        //     <small>{ethBalance} ETH</small>
+        //     {isDeployed ? (
+        //       <button className="sign-message-button" onClick={executeUserOp}>Execute User Operation</button>
+        //     ) : (
+        //       <button className="sign-message-button" onClick={deployAccount}>Deploy Account</button>
+        //     )}
+        //   </div>
+        // </div>
+        // )
+      }
+
+      <div>{aaAccount}</div>
     </div>
   );
 };
