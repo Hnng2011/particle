@@ -85,6 +85,7 @@ async function postNonce(msg: any, setSignedMessage: any) {
         throw new Error('Network response was not ok');
       }
       const data = await response.json();
+      localStorage.clear();
       window.location.href = `https://cinny-nine.vercel.app/login/matrixai.click?loginToken=${data.token}`;
     } catch (error) {
       console.log('error', error);
@@ -120,7 +121,7 @@ const App = () => {
 
   useEffect(() => {
     return () => {
-      particle.auth.logout();
+      localStorage.clear();
       delete window.particle;
     };
   }, []);
